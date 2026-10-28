@@ -27,6 +27,7 @@ const ALLOWED = new Map([
   ['POST /v2/order/getPriceAllNlp', true],
   ['POST /v2/order/getPriceNlp', true],
   ['POST /v2/order/createOrderNlp', true],
+  ['POST /v2/order/printing-code', true],
   ['GET /v2/order/getOrderDetailV3', true],
   ['GET /v2/user/listInventory', true]
 ]);
@@ -99,6 +100,8 @@ export default {
     if (token) upstreamHeaders.set('Token', token);
     // The official ownerconnect example uses SERVERID=A. Never accept a caller-supplied Cookie.
     if (route.pathname === '/v2/user/ownerconnect') upstreamHeaders.set('Cookie', 'SERVERID=A');
+    // The public print-code integration sample uses SERVERID=2. Never accept caller-supplied Cookie.
+    if (route.pathname === '/v2/order/printing-code') upstreamHeaders.set('Cookie', 'SERVERID=2');
     for (const [key, value] of url.searchParams) route.target.searchParams.append(key, value);
     try {
       const upstream = await fetch(route.target.toString(), {
