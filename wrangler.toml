@@ -1,0 +1,6 @@
+name = "viettelpost-api-desk-gateway"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+# Deploy from the worker/ folder with: npx wrangler deploy
+# No D1, KV, R2, or secret bindings are required. Credentials are passed in request bodies and are not stored.
