@@ -25,6 +25,7 @@ const ALLOWED = new Map([
   ['POST /v2/order/getPriceAll', true],
   ['POST /v2/order/getPrice', true],
   ['POST /v2/order/createOrderNlp', true],
+  ['GET /v2/order/getOrderDetailV3', true],
   ['GET /v2/user/listInventory', true]
 ]);
 const MAX_BODY_BYTES = 1024 * 1024;
