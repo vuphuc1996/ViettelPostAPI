@@ -24,6 +24,8 @@ const ALLOWED = new Map([
   ['GET /v2/categories/listWards', true],
   ['POST /v2/order/getPriceAll', true],
   ['POST /v2/order/getPrice', true],
+  ['POST /v2/order/getPriceAllNlp', true],
+  ['POST /v2/order/getPriceNlp', true],
   ['POST /v2/order/createOrderNlp', true],
   ['GET /v2/order/getOrderDetailV3', true],
   ['GET /v2/user/listInventory', true]
