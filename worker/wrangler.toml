@@ -2,5 +2,7 @@ name = "viettelpost-api-desk-gateway"
 main = "worker.js"
 compatibility_date = "2026-10-01"
 
-# Deploy from the worker/ folder with: npx wrangler deploy
-# No D1, KV, R2, or secret bindings are required. Credentials are passed in request bodies and are not stored.
+# Deploy from this folder with: npx wrangler deploy
+# Configure the inbound webhook secret separately:
+#   npx wrangler secret put WEBHOOK_SECRET
+# The webhook receiver logs metadata only; no D1/KV persistence is configured.

@@ -1,8 +1,10 @@
 /**
- * Viettel Post API Desk - CORS gateway
- * Routes: /dev/v2/... and /prod/v2/...
- * No credentials are stored. Requests are forwarded only to the two official
- * Viettel Post origins and only for the explicit allow-list below.
+ * Viettel Post API Desk - CORS gateway + inbound webhook receiver.
+ * API proxy routes are environment-prefixed: /dev/v2/... or /prod/v2/...
+ * Webhook receiver: POST /webhook/viettelpost
+ *
+ * Credentials are not persisted. Configure WEBHOOK_SECRET with Wrangler Secret.
+ * The receiver logs status metadata only; it does not persist event history.
  */
 const ALLOWED_ORIGINS = new Set([
   'https://vuphuc1996.github.io',
@@ -22,14 +24,16 @@ const ALLOWED = new Map([
   ['GET /v2/categories/listProvince', true],
   ['GET /v2/categories/listDistrict', true],
   ['GET /v2/categories/listWards', true],
-  ['POST /v2/order/getPriceAll', true],
-  ['POST /v2/order/getPrice', true],
   ['POST /v2/order/getPriceAllNlp', true],
   ['POST /v2/order/getPriceNlp', true],
   ['POST /v2/order/createOrderNlp', true],
   ['POST /v2/order/printing-code', true],
-  ['GET /v2/order/getOrderDetailV3', true],
-  ['GET /v2/user/listInventory', true]
+  // Order-maintenance routes from the public Partner Swagger reference.
+  // Verify current schema/status permissions with the Partner API document/account.
+  ['POST /v2/order/UpdateOrder', true],
+  ['POST /v2/order/checkEditOrderInfo', true],
+  ['POST /v2/order/editOrderInfoV2', true],
+  ['POST /v2/order/historyEditOrderInfo', true]
 ]);
 const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -58,12 +62,57 @@ function parseRoute(url) {
   if (!pathname.startsWith('/v2/') || pathname.includes('..') || /%2f|%5c/i.test(pathname)) return null;
   return { env, pathname, target: new URL(BASE[env] + pathname) };
 }
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+async function handleWebhook(request, env) {
+  if (request.method !== 'POST') return json({ status: 405, error: true, message: 'Method not allowed', data: null }, 405);
+  if (!/^application\/json\b/i.test(request.headers.get('Content-Type') || '')) {
+    return json({ status: 415, error: true, message: 'Content-Type application/json is required', data: null }, 415);
+  }
+  const secret = String(env.WEBHOOK_SECRET || '');
+  if (!secret) return json({ status: 503, error: true, message: 'Webhook receiver is not configured: set WEBHOOK_SECRET.', data: null }, 503);
+  const length = Number(request.headers.get('Content-Length') || 0);
+  if (length > MAX_BODY_BYTES) return json({ status: 413, error: true, message: 'Webhook body exceeds 1 MB.', data: null }, 413);
+  const raw = await request.text();
+  if (new TextEncoder().encode(raw).byteLength > MAX_BODY_BYTES) return json({ status: 413, error: true, message: 'Webhook body exceeds 1 MB.', data: null }, 413);
+  let payload;
+  try { payload = JSON.parse(raw || '{}'); }
+  catch { return json({ status: 400, error: true, message: 'Invalid JSON body.', data: null }, 400); }
+  const authHeader = String(request.headers.get('Authorization') || '').trim();
+  const bearerValue = authHeader.replace(/^Bearer\s+/i, '');
+  const customHeader = String(request.headers.get('X-Webhook-Secret') || '').trim();
+  const bodySecret = typeof payload?.TOKEN === 'string' ? payload.TOKEN : '';
+  if (![authHeader, bearerValue, customHeader, bodySecret].some(value => safeEqual(value, secret))) {
+    return json({ status: 401, error: true, message: 'Webhook authentication failed.', data: null }, 401);
+  }
+  const event = payload?.DATA || payload?.data || payload || {};
+  const orderNumber = String(event.ORDER_NUMBER || event.orderNumber || '');
+  const orderStatus = event.ORDER_STATUS ?? event.orderStatus ?? event.status ?? null;
+  const orderStatusDate = String(event.ORDER_STATUSDATE || event.orderStatusDate || '');
+  // Log identifiers/status metadata only. Never log complete payload, phone, address, or secret.
+  console.log(JSON.stringify({
+    event: 'viettelpost_webhook_received',
+    orderNumber: orderNumber || null,
+    orderStatus,
+    orderStatusDate: orderStatusDate || null,
+    receivedAt: new Date().toISOString()
+  }));
+  return json({ status: 200, error: false, message: 'OK', data: null }, 200, { 'Cache-Control': 'no-store' });
+}
+
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === '/health') {
-      return json({ ok: true, service: 'Viettel Post API Desk CORS gateway', environments: Object.keys(BASE), allowListOnly: true }, 200, { 'Cache-Control': 'no-store' });
+      return json({ ok: true, service: 'Viettel Post API Desk Gateway', environments: Object.keys(BASE), allowListOnly: true, webhook: '/webhook/viettelpost', webhookSecretConfigured: !!env.WEBHOOK_SECRET }, 200, { 'Cache-Control': 'no-store' });
     }
+    // Webhooks are server-to-server calls; do not require a browser Origin header.
+    if (url.pathname === '/webhook/viettelpost') return handleWebhook(request, env);
+
     const origin = request.headers.get('Origin') || '';
     if (!ALLOWED_ORIGINS.has(origin)) {
       return json({ ok: false, error: true, message: 'Origin is not allowed by this CORS gateway.' }, 403, { 'Vary': 'Origin', 'Cache-Control': 'no-store' });
@@ -98,7 +147,7 @@ export default {
     else if (method === 'POST') upstreamHeaders.set('Content-Type', 'application/json;charset=UTF-8');
     if (accept) upstreamHeaders.set('Accept', accept);
     if (token) upstreamHeaders.set('Token', token);
-    // The official ownerconnect example uses SERVERID=A. Never accept a caller-supplied Cookie.
+    // The official ownerconnect example uses SERVERID=A. Never accept caller-supplied Cookie.
     if (route.pathname === '/v2/user/ownerconnect') upstreamHeaders.set('Cookie', 'SERVERID=A');
     // The public print-code integration sample uses SERVERID=2. Never accept caller-supplied Cookie.
     if (route.pathname === '/v2/order/printing-code') upstreamHeaders.set('Cookie', 'SERVERID=2');
@@ -117,13 +166,11 @@ export default {
       const requestId = upstream.headers.get('X-Request-Id');
       if (requestId) responseHeaders['X-Request-Id'] = requestId;
       const textBody = await upstream.text();
-      // Do not proxy redirects, cookies, or upstream CORS headers to the browser.
       if (upstream.status >= 300 && upstream.status < 400) {
         return json({ ok: false, error: true, message: 'The upstream returned a redirect; automatic redirects are disabled in this gateway.' }, 502, responseHeaders);
       }
       return new Response(textBody || null, { status: upstream.status, headers: responseHeaders });
-    } catch (error) {
-      // Do not log or echo user credentials, token headers, or request body.
+    } catch {
       return json({ ok: false, error: true, message: 'Upstream request failed. Verify Viettel Post availability and gateway deployment.' }, 502, corsHeaders(origin));
     }
   }
